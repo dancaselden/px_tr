@@ -14,6 +14,8 @@ import tspot
 import sewpy
 
 import unwise_psf
+import crowdsource
+import psf as cs_psf
 
 
 #import logging
@@ -365,10 +367,25 @@ def work_(coadd_id,coadds):
     # Get PSFs
     # TODO: Still need to fiure out whether to pass W2 PSF
     # for both W1 and W2
-    w1_psf = make_fits_psf(unwise_psf.get_unwise_psf(1,coadd_id))
-    w2_psf = make_fits_psf(unwise_psf.get_unwise_psf(2,coadd_id))
+    w1_psf = unwise_psf.get_unwise_psf(1,coadd_id)
+    w2_psf = unwise_psf.get_unwise_psf(2,coadd_id)
+
+    # Try crowdsource
+    print w2_psf.shape
+    #w2_psf_vp = cs_psf.VariablePixelizedPSF(cs_psf.central_stamp(w2_psf),normalize=-1)
+    w2_psf_s = cs_psf.SimplePSF(w2_psf)
+    #x, y, flux, model, psf = crowdsource.fit_im(w2_fits,w2_psf)
+    # Need to pass in a weight. Should recommend considering a weight default = 1
+    # Also edited code to ignore a None "dq" when writing the flags column
+    # need to figure out what that's all about
+    x, y, flux, model, psf = crowdsource.fit_im(w2_im,w2_psf_s,weight=1)
+    df = pd.DataFrame(x)
+    df.to_csv("/tmp/crowdsource_results.csv",index=False)
     
-    sources = run_extract_sources(w1_fits,w2_fits,w1_psf=w1_psf,w2_psf=w2_psf)
+    w1_psf_fits = make_fits_psf(w1_psf)
+    w2_psf_fits = make_fits_psf(w2_psf)
+    
+    sources = run_extract_sources(w1_fits,w2_fits,w1_psf=w1_psf_fits,w2_psf=w2_psf_fits)
     
     print sources
     tps,fns = check_f_b(w2_meta,sources)
