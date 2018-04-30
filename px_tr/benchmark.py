@@ -145,6 +145,9 @@ def get_covmap(coadd_id,epoch,band):
 
 
 def make_fits_image(hdr,coadd):
+    """
+    Convert header and image data to fits format
+    """
     fim = aif.PrimaryHDU(coadd,header=hdr)
     sio = StringIO.StringIO()
     fim.writeto(sio)
@@ -153,6 +156,9 @@ def make_fits_image(hdr,coadd):
 
 
 def make_fits_psf(psf):
+    """
+    Convert PSF data array into fits format for source extractor
+    """
     print psf.shape
     fim = aif.BinTableHDU.from_columns([aif.Column(name="PSF_MASK",
                                                    format="%dE"%psf.size,
@@ -187,6 +193,12 @@ def make_fits_psf(psf):
 
 
 def make_coadd_multi(coadds):
+    """
+    TODO: CURRENTLY NOT USED
+
+    Old code for coadding coadds and adding synths
+    """
+    
     # Download TR coadds
     ims = [aif.open(get_coadd(x[0],x[1],x[2]))
            for x in coadds.index]
@@ -229,21 +241,20 @@ def make_coadd_multi(coadds):
     # For tiles w/ lots of coadds, this exhausts memory
     # Instead, slice them into rows then re-join
     # TODO: split and array
-    #im = make_fits_image(hdr,np.ma.average(ims,weights=covmaps,axis=0))
-    #open("/tmp/planetx_synthesis_%s_%s_b%d.fits"
-    #     %(coadd_id,
-    #       "FORWARD" if meta["FORWARD"] == 1 else "BACKWARD",
-    #       band),"wb").write(im)
     return hdr,np.ma.average(ims,weights=covmaps,axis=0)
 
 
 def add_synths(meta):
-    # Download TR coadds
+    """
+    Download coadd and add synths
+    """
     coadd_id,epoch,band = meta.name
+    
+    # Download TR coadds
     im = aif.open(get_coadd(coadd_id,epoch,band))
-        
-    hdr = im[0].header
 
+    # Separate header and image data
+    hdr = im[0].header
     im = im[0].data
     
     # Add in synthesized planetx
@@ -253,18 +264,16 @@ def add_synths(meta):
             gauss = makeGaussian(2048,fwhm=(6.1/2.75),center=(x,y))
             gauss *= flx
             im += gauss
-
-        #open("/tmp/planetx_synthesis_%s_%s_b%d_e%d.fits"
-        #     %(coadd_id,
-        #       "FORWARD" if meta["FORWARD"] == 1 else "BACKWARD",
-        #       band,
-        #       epoch),
-        #     "wb").write(make_fits_image(hdr,im))        
     
     return hdr,im
 
 
 def run_extract_sources(w1_coadd,w2_coadd,w1_psf=None,w2_psf=None):
+    """
+    Run source extractor using sewpy.
+
+    Uses W2 for identifying sources, and W1 for photometry only
+    """
     w2_sources = extract_sources(w2_coadd,psf=w2_psf)
     w1_sources = extract_sources(w1_coadd,cutout2=w2_coadd,psf=w1_psf) # TODO: w1 or w2 psf???
     w2_sources["MAG_AUTO_W1"] = w1_sources["MAG_AUTO"]
@@ -277,19 +286,22 @@ def run_extract_sources(w1_coadd,w2_coadd,w1_psf=None,w2_psf=None):
     return w2_sources
 
 
-def work_(coadd_id,coadds):
+def work_(coadd_id,coadds,out):
+    """
+    coadd_id: ID (name/tile name) of the coadd, such as 1194p212
+    coadds: Pandas DataFrame describing coadd metadata, such as epochs, bands, dates
+    out: directory where to write results
+    """
     coadds = coadds.copy()
 
     w2_meta = coadds.loc[(coadd_id,slice(None),2),:]
 
-    # Make synthetic movers
+    # Plan synthetic planets
+    # Pick positions and fluxes
+    # TODO: Need to re-add epochal offsets from orbit simulation
     mov_x = []
     mov_y = []
     mov_flx = []
-    # Take in mov x/y offsets for each coadd
-    # Add the offsets to a number of random positions
-    # to make multiple gausses w/ the same motion at
-    # random places
     mjdstart = None
     for i,meta in w2_meta.iterrows():
         if mjdstart is None:
@@ -300,7 +312,8 @@ def work_(coadd_id,coadds):
         ys = []
         flxs = []
         random.seed(0)
-        for j in xrange(10):
+        for j in xrange(10): # Number of synths to create
+            # Pick pixel positions x, y, and pick flux
             px = random.uniform(0+10,2048-10)
             py = random.uniform(0+10,2048-10)
             flx = (random.uniform(50,400)/6.)
@@ -312,21 +325,27 @@ def work_(coadd_id,coadds):
         mov_y.append(ys)
         mov_flx.append(flxs)
 
+    # Store x,y,flx for use when coadding
     coadds.loc[w2_meta.index,"SYNTH_X"] = pd.Series(mov_x,w2_meta.index)
     coadds.loc[w2_meta.index,"SYNTH_Y"] = pd.Series(mov_y,w2_meta.index)
     coadds.loc[w2_meta.index,"SYNTH_FLUX"] = pd.Series(mov_flx,w2_meta.index)
 
+    # Subset metadata for this coadd, epoch 0 only
     w1_meta = coadds.loc[(coadd_id,0,1),:]
     w2_meta = coadds.loc[(coadd_id,0,2),:]
 
+    # Download coadds and add synths
+    # (only doing W2, but using same func to grab w1 coadd)
     w1_hdr,w1_im = add_synths(w1_meta)
     w2_hdr,w2_im = add_synths(w2_meta)
 
+    # Convert to fits format
     w1_fits = make_fits_image(w1_hdr,w1_im)
     w2_fits = make_fits_image(w2_hdr,w2_im)
 
-    open("/tmp/w2.fits","wb").write(w2_im)
-    
+    # Write out resulting files
+    # (only doing W2)
+    open("%s/%s_w2_synths.fits"%(out,coadd_id),"wb").write(w2_im)
 
     # Extract sources & check missed fakes
     def check_f_b(meta,srcs):
@@ -340,8 +359,9 @@ def work_(coadd_id,coadds):
         for i in xrange(len(xs)):
             x,y,flx = xs[i],ys[i],flxs[i]
 
-            tmp =  srcs[((abs(srcs["XWIN_IMAGE"]-(x+1)) < 1) &
-                         (abs(srcs["YWIN_IMAGE"]-(y+1)) < 1))].to_pandas()
+            # Find detection within 3 pixel width square centered on synth
+            tmp = srcs[((abs(srcs["XWIN_IMAGE"]-(x+1)) < 1) &
+                        (abs(srcs["YWIN_IMAGE"]-(y+1)) < 1))].to_pandas()
 
             if tmp.shape[0] == 0:
                 miss_xs.append(x)
@@ -355,7 +375,6 @@ def work_(coadd_id,coadds):
             tmp["SYNTH_FLUX"] = flx
             sources.append(tmp)
             
-        #if len(sources) <= 1: return sources
         tps = None
         if len(sources) > 0:
             tps = pd.concat(sources,ignore_index=True)
@@ -364,71 +383,99 @@ def work_(coadd_id,coadds):
                                  "SYNTH_FLUX":miss_flxs,
         })
 
-    # Get PSFs
+    # Get PSFs from unwise_psf
     # TODO: Still need to fiure out whether to pass W2 PSF
     # for both W1 and W2
     w1_psf = unwise_psf.get_unwise_psf(1,coadd_id)
     w2_psf = unwise_psf.get_unwise_psf(2,coadd_id)
 
     # Try crowdsource
-    print w2_psf.shape
+    
+    # First, make a PSF
     #w2_psf_vp = cs_psf.VariablePixelizedPSF(cs_psf.central_stamp(w2_psf),normalize=-1)
+    # TODO: need to decide whether this is the right mechanism for creating a PSF, and
+    #       whether to twiddle any knobs (normalize?)
     w2_psf_s = cs_psf.SimplePSF(w2_psf)
-    #x, y, flux, model, psf = crowdsource.fit_im(w2_fits,w2_psf)
-    # Need to pass in a weight. Should recommend considering a weight default = 1
+
+    # Then, call fit_im with the image and PSF
+    
+    # Need to pass in a weight or crowdsource will crash.
+    
+    # Should recommend considering a weight default = 1
+    
     # Also edited code to ignore a None "dq" when writing the flags column
     # need to figure out what that's all about
-    x, y, flux, model, psf = crowdsource.fit_im(w2_im,w2_psf_s,weight=1)
-    df = pd.DataFrame(x)
-    df.to_csv("/tmp/crowdsource_results.csv",index=False)
     
+    # These results (x, y, flux, model, psf) have changed since the crowdsource
+    # code that described fit_im's usage was written. Now, "x" contains the
+    # source table, along with x, y, and so on
+    
+    # TODO: Figure out correct weight to use. coverage maps?
+    x, y, flux, model, psf = crowdsource.fit_im(w2_im,w2_psf_s,weight=1)
+    
+    # Convert that source table to a dataframe for easy csv-ing
+    df = pd.DataFrame(x)
+    
+    # Write to disk
+    df.to_csv("%s/%s_cs_sources.csv"%(out,coadd_id),index=False)
+
+    # Convert PSFs to fits for sextractor
+    # Following sewpy's code, but there's some parameters we've left empty. Those may
+    # be important.
+    # TODO: what should they be?
     w1_psf_fits = make_fits_psf(w1_psf)
     w2_psf_fits = make_fits_psf(w2_psf)
-    
+
+    # Run sextractor
     sources = run_extract_sources(w1_fits,w2_fits,w1_psf=w1_psf_fits,w2_psf=w2_psf_fits)
-    
-    print sources
+
+    # Identify detected vs undetected synths from sextractor results
+    # TODO: do this for crowdsource, too.
     tps,fns = check_f_b(w2_meta,sources)
 
     if tps is not None:
-        tps.to_csv("/tmp/%s_tps.csv"%(coadd_id),index=False)
-    fns.to_csv("/tmp/%s_fns.csv"%(coadd_id),index=False)
+        tps.to_csv("%s/%s_se_tps.csv"%(out,coadd_id),index=False)
+    fns.to_csv("%s/%s_se_fns.csv"%(out,coadd_id),index=False)
     
-    return sources
+    sources.write("%s/%s_se_sources"%(out,coadd_id),overwrite=True,format="ascii") 
 
 
 def work(args):
-    coadds,outfile = args
+    coadds,out = args
     for coadd_id,coadds_ in coadds.groupby(level=[0]):
         try:
             print coadd_id
-            pairs = work_(coadd_id,coadds_)
-            pairs.write("%s.%s"%(outfile,coadd_id),overwrite=True,format="ascii")
+            work_(coadd_id,coadds_,out)
         except Exception,e:
             import traceback
             traceback.print_exc()
             print e
-            open("%s.%s.failed"%(outfile,coadd_id),"wb")
+            open("%s/%s.failed"%(out,coadd_id),"wb")
 
 def main():
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("out",type=str)
+    ap.add_argument("out",type=str,help="Directory for storing results")
     ap.add_argument("--atlas",default="tr_neo3_index.fits")
-    ap.add_argument("--coadd",default=None,type=str)
     args = ap.parse_args()
 
-    outf = open(args.out,"ab")
+    # Prepare output directory
+    if not os.path.exists(args.out):
+        # Make if it doesn't exist
+        os.mkdir(args.out)
+    elif not os.path.isdir(args.out):
+        # It exists, but it's not a directory!
+        raise Exception("'out' parameter is not a directory")
 
     # Read atlas into pandas
     atlas = aif.open(args.atlas)[1].data
     atlas = pd.DataFrame(atlas.tolist(),columns=atlas.names)
     atlas.set_index(["COADD_ID","EPOCH","BAND"],inplace=True)
 
-
     # Build work map
     num_workers = mp.cpu_count()-1
     #split_keys = np.array_split(atlas.index.levels[0],num_workers)
+    # Set to only run one coadd for testing purposes
     split_keys = ["1194p212"]
 
     pool = mp.Pool(num_workers)
