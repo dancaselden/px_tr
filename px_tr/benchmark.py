@@ -1,3 +1,4 @@
+import requests
 import random
 import os
 import cStringIO as StringIO
@@ -141,6 +142,24 @@ def get_covmap(coadd_id,epoch,band):
     sio = StringIO.StringIO(gz)
     sio.seek(0)
     
+    return sio
+
+def get_invvar(coadd_id,epoch,band):
+    path_ = "/".join(
+        ("http://portal.nersc.gov/project/cosmo/temp/ameisner/tr_neo3",
+         "e%03d"%int(epoch), # epoch in e### form
+         coadd_id[:3], # first 3 digits of RA
+         coadd_id, # the tile name itself
+         "unwise-%s-w%d-invvar-m.fits.gz"%(coadd_id,band)))
+    print path_
+    req = requests.get(path_)
+    invvar = req.content
+    sio = StringIO.StringIO(req.content)
+    sio.seek(0)
+    gz = gzip.GzipFile(fileobj=sio,mode="rb").read()
+    sio = StringIO.StringIO(gz)
+    sio.seek(0)
+
     return sio
 
 
@@ -402,6 +421,10 @@ def work_(coadd_id,coadds,out):
     # Need to pass in a weight or crowdsource will crash.
     
     # Should recommend considering a weight default = 1
+    coadd_id,epoch,band = w2_meta.name
+    invvar = aif.open(get_invvar(coadd_id,epoch,band))[0].data
+
+
     
     # Also edited code to ignore a None "dq" when writing the flags column
     # need to figure out what that's all about
@@ -411,7 +434,7 @@ def work_(coadd_id,coadds,out):
     # source table, along with x, y, and so on
     
     # TODO: Figure out correct weight to use. coverage maps?
-    x, y, flux, model, psf = crowdsource.fit_im(w2_im,w2_psf_s,weight=1)
+    x, y, flux, model, psf = crowdsource.fit_im(w2_im,w2_psf_s,weight=invvar)
     
     # Convert that source table to a dataframe for easy csv-ing
     df = pd.DataFrame(x)
