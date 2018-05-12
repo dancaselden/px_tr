@@ -345,7 +345,7 @@ def work_(coadd_id,coadds,out):
 
     # Write out resulting files
     # (only doing W2)
-    open("%s/%s_w2_synths.fits"%(out,coadd_id),"wb").write(w2_im)
+    open("%s/%s_w2_synths.fits"%(out,coadd_id),"wb").write(w2_fits)
 
     # Extract sources & check missed fakes
     def check_f_b(meta,srcs):
